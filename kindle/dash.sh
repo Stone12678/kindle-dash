@@ -68,8 +68,36 @@ show() {
         log "没有可用图片，跳过刷新"
         return 1
     fi
-    fbink -q -g "file=$DASH_IMG,halign=CENTER,valign=CENTER,w=$SCREEN_W,h=$SCREEN_H" -f
+    if [ -z "$FBINK" ]; then
+        log "找不到 fbink，无法显示"
+        return 1
+    fi
+    "$FBINK" -q -g "file=$DASH_IMG,halign=CENTER,valign=CENTER,w=$SCREEN_W,h=$SCREEN_H" -f
     log "已刷新屏幕"
+}
+
+# ---------- 系统界面开关 ----------
+# 新固件（5.16+）把整个显示栈（lxinit/framework/pillow/blanket）收进了一个
+# 叫 x 的 upstart 任务，停 framework 单个进程压不住它，屏保还会自己冒出来。
+# 老固件没有 x，退回 init.d + 单独停 pillow/blanket。
+stop_ui() {
+    if initctl status x >/dev/null 2>&1; then
+        initctl stop x >/dev/null 2>&1
+        return 0
+    fi
+    [ -x "$FRAMEWORK_INIT" ] && "$FRAMEWORK_INIT" stop >/dev/null 2>&1
+    initctl stop pillow  >/dev/null 2>&1
+    initctl stop blanket >/dev/null 2>&1
+    return 0
+}
+
+start_ui() {
+    if initctl status x >/dev/null 2>&1; then
+        initctl start x >/dev/null 2>&1
+        return 0
+    fi
+    [ -x "$FRAMEWORK_INIT" ] && "$FRAMEWORK_INIT" start >/dev/null 2>&1
+    return 0
 }
 
 # ---------- 刷新循环（进程管理） ----------
@@ -94,24 +122,39 @@ start_keeper() {
 }
 
 # ---------- 环境检查 ----------
-need() {
-    if ! command -v "$1" >/dev/null 2>&1; then
-        echo "缺少 $1 —— $2"
-        return 1
-    fi
-    return 0
-}
-
 case "$1" in
     on)
-        # 顺序很重要：先阻止屏保（它依赖系统界面），再停界面
-        lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
-        "$FRAMEWORK_INIT" stop
-        sleep 2
+        # 从书架上的 scriptlet 点「启动」时，这个进程是 framework 拉起来的，
+        # 直接停系统界面会把它自己一起收走（内核 cgroup 层面）。
+        # 所以这里只落标记、甩出一个脱离终端的进程，自己立刻返回，
+        # 8 秒后那个进程再去停界面——那时 scriptlet 早就退干净了。
         touch "$DASH_DIR/.active"
+        log "收到启动指令，8 秒后接管屏幕"
+        setsid sh "$HERE/dash.sh" boot </dev/null >/dev/null 2>&1 &
+        ;;
+
+    boot)
+        # 真正干活的分支。两个来源：上面 fork 出来的，或者开机时 upstart 拉起的。
+        sleep 8
+        [ -f "$DASH_DIR/.active" ] || exit 0
+        lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
+        stop_ui
+        sleep 3
         log "进入看板模式"
         if fetch; then show; fi
         start_keeper
+        ;;
+
+    peek)
+        # 只画一屏，不动系统界面。第一次验证链路用：屏幕闪一下看板，
+        # 几秒后会被状态栏重绘盖回去。这一步最安全，不会把自己搞掉。
+        lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
+        if fetch; then
+            show && echo "画好了。几秒后会被系统界面盖回，属正常。"
+        else
+            echo "拉图失败，看 $DASH_LOG"
+            exit 1
+        fi
         ;;
 
     loop)
@@ -146,22 +189,29 @@ case "$1" in
     off)
         rm -f "$DASH_DIR/.active"
         stop_keeper
-        "$FRAMEWORK_INIT" start
+        start_ui
         lipc-set-prop com.lab126.powerd preventScreenSaver 0 >/dev/null 2>&1
         log "退出看板模式"
         ;;
 
     test)
         echo "== 环境检查 =="
-        need fbink   "FBInk 没装，KUAL 里的 FBInk 扩展或 KPM 装一下" || exit 1
-        need curl    "没有 curl" || exit 1
-        echo "fbink: $(command -v fbink)"
+        if [ -z "$FBINK" ]; then
+            echo "[缺] fbink —— 搜索框里试 ;kpm install fbink"
+            exit 1
+        fi
+        if ! command -v curl >/dev/null 2>&1; then
+            echo "[缺] curl"
+            exit 1
+        fi
+        echo "fbink: $FBINK"
         echo "curl : $(command -v curl)"
+        echo "uid  : $(id -u 2>/dev/null) / $(id 2>/dev/null | cut -d' ' -f1)"
         echo
         echo "== 网络与图片地址 =="
         if fetch; then
             echo "图片已下载：$DASH_IMG"
-            echo "尺寸：$(fbink -q -i -g "file=$DASH_IMG" 2>&1 | head -1)"
+            "$FBINK" -q -i -g "file=$DASH_IMG" 2>&1 | head -1
         else
             echo "下载失败，检查 config.sh 里的 DASH_URL"
             exit 1
@@ -172,7 +222,7 @@ case "$1" in
         ;;
 
     *)
-        echo "用法: dash.sh on|update|off|test"
+        echo "用法: dash.sh on|off|update|peek|test"
         exit 1
         ;;
 esac

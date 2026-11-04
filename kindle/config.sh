@@ -40,3 +40,22 @@ LOG_MAX_LINES=200
 # 一是不同的固件版本路径有差异，出问题时改这里就行，不用翻脚本；
 # 二是可以指到空壳桩程序上，在电脑上把整套流程跑一遍再碰真机。
 FRAMEWORK_INIT="/etc/init.d/framework"    # 原生系统界面（看板模式下要停掉它）
+
+# ---- fbink ----
+# SpiderCat 越狱自带 fbink，但装在 libkh 目录下，不在 PATH 里，
+# 所以不能只靠命令名去找。安装脚本会探测一次写进 .fbink 缓存，
+# 这里优先读缓存，读不到再现场找一遍。
+FBINK="${FBINK:-}"
+if [ -z "$FBINK" ] && [ -f "$DASH_DIR/.fbink" ]; then
+    FBINK="$(cat "$DASH_DIR/.fbink" 2>/dev/null)"
+fi
+if [ -z "$FBINK" ] || [ ! -x "$FBINK" ]; then
+    FBINK=""
+    for c in "$(command -v fbink 2>/dev/null)" \
+             /mnt/us/libkh/bin/fbink \
+             /var/local/kmc/libkh/bin/fbink \
+             /mnt/us/koreader/fbink \
+             /mnt/us/extensions/fbink/bin/fbink; do
+        if [ -n "$c" ] && [ -x "$c" ]; then FBINK="$c"; break; fi
+    done
+fi

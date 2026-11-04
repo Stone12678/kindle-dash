@@ -30,8 +30,8 @@ say ""
 
 # ---------- 1. 依赖检查 ----------
 MISS=0
-if ! command -v fbink >/dev/null 2>&1; then
-    say "[缺] fbink —— 先用 KPM 装：搜索框输入 ;kpm install fbink"
+if [ -z "$FBINK" ]; then
+    say "[缺] fbink —— 搜索框里试：;kpm install fbink"
     MISS=1
 fi
 if ! command -v curl >/dev/null 2>&1; then
@@ -44,7 +44,7 @@ if [ "$MISS" = "1" ]; then
     exit 1
 fi
 
-say "[有] fbink: $(command -v fbink)"
+say "[有] fbink: $FBINK"
 say "[有] curl : $(command -v curl)"
 
 # ---------- 2. 配置检查 ----------
