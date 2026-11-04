@@ -1,0 +1,16 @@
+{
+  "manifest_version": 2,
+  "id": "kindle-dash",
+  "name": "Kindle Dash",
+  "author": "Stone",
+  "description": "把闲置 Kindle 变成电子墨水信息看板：大时钟、天气预警、未来 6 天、在读进度，配一只猫。",
+  "version": [
+    1,
+    0,
+    0
+  ],
+  "dependencies": [],
+  "supported_platforms": [
+    "kindlehf"
+  ]
+}
