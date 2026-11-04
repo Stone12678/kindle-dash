@@ -134,10 +134,18 @@ echo "== 0. 行尾符必须是 LF =="
 # 这条放在最前面：CRLF 的 shell 脚本拷到 Kindle 上，/bin/sh 会报
 # "/bin/sh: not found" 或莫名其妙的语法错误，人根本想不到是行尾的问题。
 # Windows 上的编辑器和 Git 都可能悄悄改成 CRLF，所以每次都查一遍。
-bad_eol=""
-for f in "$PROJ"/kindle/*.sh "$PROJ"/tests/*.sh; do
-    grep -q $'\r' "$f" 2>/dev/null && bad_eol="$bad_eol $(basename "$f")"
-done
+# 用 python 读字节来判断：shell 里对 \r 的处理各版本不一致，
+# 有时候明明有 CR 却匹配不到，这条检查就白做了。
+bad_eol=$(PROJ_DIR="$PROJ" python -c '
+import os, pathlib
+root = pathlib.Path(os.environ["PROJ_DIR"])
+hits = []
+for sub in ("kindle", "tests"):
+    for f in sorted((root / sub).glob("*.sh")):
+        if b"\r\n" in f.read_bytes():
+            hits.append(f.name)
+print(" ".join(hits))
+' 2>/dev/null)
 if [ -z "$bad_eol" ]; then
     ok "shell 脚本均为 LF 行尾"
 else
