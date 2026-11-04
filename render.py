@@ -397,7 +397,7 @@ def render(now: datetime | None = None) -> Path:
             print(f"[warn] reading.json 解析失败: {e}")
 
     text(d, (M, 384), "在读", 36, bold=True)
-    text(d, (W - M, 384), "封面与进度来自 Kindle 本地", 24, LIGHT, anchor="rs")
+    text(d, (W - M, 384), "进度手动维护", 24, LIGHT, anchor="rs")
 
     # ===== 猫: 版面主角, 居中横向大图 =====
     # 位图缺失时退回矢量简笔画, 保证脚本不会挂
