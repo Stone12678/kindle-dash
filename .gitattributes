@@ -1,0 +1,13 @@
+# 行尾符统一成 LF，Windows 上也不许转
+#
+# 为什么必须写这一行：kindle/*.sh 最终要在 Kindle 上由 /bin/sh 执行，
+# 而 CRLF 行尾会让 sh 把 "\r" 当成命令的一部分，报出来的错是
+# "/bin/sh: not found" 或者莫名其妙的语法错误——在设备上极难查。
+# Git for Windows 默认会把文本文件转成 CRLF，所以这里是硬性拦截。
+
+* text=auto eol=lf
+
+# 位图不能被当文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary

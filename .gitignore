@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+
+# 渲染产物由 GitHub Actions 生成后推到 render 分支，main 分支不需要存
+output/
+
+# Kindle 端上报的实时数据（若启用）
+data/reading.json
+
+# 本地测试的临时沙箱
+.test-tmp/

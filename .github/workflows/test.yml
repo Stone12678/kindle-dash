@@ -1,0 +1,25 @@
+name: 脚本自测
+
+# 改动 Kindle 端脚本时跑一遍，防止把跑在真机上的东西改坏。
+# 真机上没法调试，一个重定向写错就是一片白屏，所以这里必须拦住。
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  kindle-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 跑测试
+        run: bash tests/test_kindle.sh

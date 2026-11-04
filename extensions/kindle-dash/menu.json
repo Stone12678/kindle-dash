@@ -1,0 +1,28 @@
+{
+	"items": [
+		{
+			"name": "开启看板（全屏显示）",
+			"priority": 0,
+			"action": "sh /mnt/us/kindle-dash/kindle/dash.sh on",
+			"exitmenu": true
+		},
+		{
+			"name": "立即刷新一次",
+			"priority": 1,
+			"action": "sh /mnt/us/kindle-dash/kindle/dash.sh update",
+			"exitmenu": true
+		},
+		{
+			"name": "退出看板（回到书架）",
+			"priority": 2,
+			"action": "sh /mnt/us/kindle-dash/kindle/dash.sh off",
+			"exitmenu": true
+		},
+		{
+			"name": "环境自检",
+			"priority": 3,
+			"action": "sh /mnt/us/kindle-dash/kindle/dash.sh test",
+			"exitmenu": true
+		}
+	]
+}

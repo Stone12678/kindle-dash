@@ -1,0 +1,58 @@
+name: 渲染 Kindle 看板
+
+on:
+  schedule:
+    # GitHub 的 cron 用 UTC，每 30 分钟一次。注意实际会有 5~15 分钟延迟，看板无所谓
+    - cron: "*/30 * * * *"
+  workflow_dispatch:          # 也可以在网页上手动点一下立即渲染
+
+# 同一时刻只跑一个，避免上一次还没推完又开一个
+concurrency:
+  group: render
+  cancel-in-progress: true
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write         # 需要写权限才能把图片推到 render 分支
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装中文字体
+        # render.py 会按顺序找字体，容器里没有 msyh，必须装 Noto CJK 才能出中文
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-cjk
+          echo "可用中文字体："
+          fc-list :lang=zh family | sort -u | head -5
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 渲染
+        run: python render.py
+
+      - name: 发布到 render 分支
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          mkdir -p /tmp/pub && cp output/dashboard.png /tmp/pub/
+          cd /tmp/pub
+          git init -q -b render
+          git config user.name  "kindle-dash-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add dashboard.png
+          git commit -q -m "render $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # 每次强制覆盖：render 分支始终只有 1 个提交，
+          # 否则一天 48 张 PNG 累积下去，仓库很快就几十 GB
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" render
+          echo "已发布：https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/render/dashboard.png"
