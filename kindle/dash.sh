@@ -1,12 +1,18 @@
 #!/bin/sh
 # Kindle 看板控制脚本
 #
-#   dash.sh on      进入看板模式：停掉系统界面 + 拉图 + 全屏显示
-#   dash.sh update  只拉图并刷新（已在看板模式下，供 cron 定时调用）
-#   dash.sh off     退出看板模式，恢复原生系统界面
+#   dash.sh on      进入看板模式：停掉系统界面 + 拉图 + 全屏显示 + 启动刷新循环
+#   dash.sh update  只拉图并刷新（手动用）
+#   dash.sh off     退出看板模式，停刷新循环 + 恢复原生系统界面
 #   dash.sh test    检查环境（fbink / curl / 网络 / 图片地址）
+#   dash.sh loop    内部用：常驻刷新循环，由 on 启动、off 结束
 #
 # 放在 /mnt/us/kindle-dash/kindle/dash.sh，需与 config.sh 同目录
+#
+# 为什么用常驻循环而不是 cron：
+#   1. kindle 的 crond 重启后不保证自己起来，看板会在某次重启后悄悄停更
+#   2. 加 cron 要 mntroot rw 把根分区挂成可写，写到一半断电有变砖风险
+#   循环只碰 /mnt/us 用户分区，生命周期跟看板模式完全一致，安全得多。
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/config.sh"
@@ -66,6 +72,27 @@ show() {
     log "已刷新屏幕"
 }
 
+# ---------- 刷新循环（进程管理） ----------
+stop_keeper() {
+    if [ -f "$KEEPER_PID" ]; then
+        kill "$(cat "$KEEPER_PID")" 2>/dev/null
+        rm -f "$KEEPER_PID"
+    fi
+    # 兜底：进程号文件丢了也要清干净，否则开一次看板就多一个后台循环在跑
+    for p in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+        if tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q "dash.sh loop"; then
+            kill "$p" 2>/dev/null
+        fi
+    done
+}
+
+start_keeper() {
+    stop_keeper
+    nohup sh "$HERE/dash.sh" loop >/dev/null 2>&1 &
+    echo "$!" > "$KEEPER_PID"
+    log "刷新循环已启动，每 ${REFRESH_SEC} 秒一次"
+}
+
 # ---------- 环境检查 ----------
 need() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -84,18 +111,33 @@ case "$1" in
         touch "$DASH_DIR/.active"
         log "进入看板模式"
         if fetch; then show; fi
+        start_keeper
+        ;;
+
+    loop)
+        # 常驻循环。判断 .active 而不是单纯 while true：
+        # 用户点「退出看板」后，最迟一个周期内自己退出，不会留孤儿进程。
+        while [ -f "$DASH_DIR/.active" ]; do
+            sleep "$REFRESH_SEC"
+            [ -f "$DASH_DIR/.active" ] || break
+            if fetch; then
+                show
+            else
+                # 下载失败保留上一次的图，不清屏——宁可显示旧数据也不要白屏
+                log "本次刷新失败，保留原图"
+            fi
+        done
+        rm -f "$KEEPER_PID"
         ;;
 
     update)
-        # cron 每 30 分钟会调一次。没在看板模式就直接退出，
-        # 否则你正在看书时屏幕会突然被看板顶掉
+        # 手动刷新。没在看板模式就不动屏幕，否则你正在看书时会被顶掉
         if [ ! -f "$DASH_DIR/.active" ]; then
             exit 0
         fi
         if fetch; then
             show
         else
-            # 下载失败保留上一次的图，不清屏——宁可显示旧数据也不要白屏
             log "本次刷新失败，保留原图"
             exit 1
         fi
@@ -103,6 +145,7 @@ case "$1" in
 
     off)
         rm -f "$DASH_DIR/.active"
+        stop_keeper
         "$FRAMEWORK_INIT" start
         lipc-set-prop com.lab126.powerd preventScreenSaver 0 >/dev/null 2>&1
         log "退出看板模式"

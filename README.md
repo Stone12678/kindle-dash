@@ -93,17 +93,28 @@ DASH_URL="https://raw.githubusercontent.com/你的用户名/你的仓库名/rend
 
 ### 2. 安装
 
-在 Kindle 上开 KUAL → 打开终端（KUAL 的 Term 扩展，或 SSH），执行：
+数据线连上 Kindle，把整个 `kindle/` 和 `extensions/` 两个目录拷到 Kindle 根目录，最后应该是：
 
-```sh
-sh /mnt/us/kindle-dash/kindle/install.sh
+```
+/mnt/us/kindle-dash/kindle/          ← 控制脚本
+/mnt/us/extensions/kindle-dash/      ← KUAL 菜单
 ```
 
-它会装好 KUAL 菜单和每 30 分钟的定时任务。
+然后把 Kindle 从电脑上安全弹出，在设备上打开 KUAL → **Kindle 看板 → ① 安装 / 更新（首次必做）**。
 
-### 3. 自检再开机
+它会检查 fbink 和 curl、装好菜单、给脚本加执行权限。装完的日志在 `/mnt/us/kindle-dash/install.log`。
 
-KUAL → **Kindle 看板 → 环境自检**。它会依次检查 fbink、网络、图片能否下载、能不能刷屏。全通过再点「开启看板」。
+> 不需要 SSH，也不需要终端——菜单里点一下就行。
+
+### 3. 开启
+
+KUAL → **Kindle 看板 → 开启看板（全屏显示）**。
+
+屏幕变成看板图就通了。如果屏幕没变化，第一嫌疑是 fbink 没装——KUAL 里搜 `;kpm install fbink`，装完再点一次。
+
+**刷新是怎么走的**：`开启看板` 会顺手起一个常驻循环，每 30 分钟拉一次新图；`退出看板` 会把它杀掉。不用配 cron，也不碰系统分区。
+
+> 早期版本往 `/etc/crontab/root` 写定时任务，需要 `mntroot rw` 把根分区挂成可写。**这一步断电有变砖风险**，而且 Kindle 的 crond 重启后不保证自己起来，看板会悄悄停更。现在改成进程内循环，只动 `/mnt/us` 用户分区。
 
 ### 4. 退出
 
@@ -132,13 +143,14 @@ KUAL → **Kindle 看板 → 退出看板**，回到原生书架。
 bash tests/test_kindle.sh
 ```
 
-39 项检查，覆盖 `on / update / off / test` 四条分支，用桩程序替掉 fbink、curl、系统界面，在临时目录里模拟整台设备。重点验证这几件事：
+50 项检查，覆盖 `on / update / off / test / loop` 五条分支，用桩程序替掉 fbink、curl、系统界面，在临时目录里模拟整台设备。重点验证这几件事：
 
-- 没开看板模式时，定时任务静默退出，不抢屏
+- 没开看板模式时，刷新静默退出，不抢屏
 - 断网时**保留上一张图**，不刷白屏
 - 下载到 HTML 错误页时能识别出来（校验 PNG 魔数），不往屏幕上糊
 - 主地址挂了自动切备用地址
-- 重复安装不会把定时任务追加两遍
+- **安装脚本不调 `mntroot`**（一旦有人写回去，测试立刻红）
+- **退出看板后刷新循环真的停了**（否则会在后台一直耗电）
 - 所有 shell 脚本是 LF 行尾
 
 之所以要在本机测：这些脚本跑在 Kindle 上，出了错的表现不是报错，而是屏幕一片白、日志里什么都看不出来。推送后 GitHub 也会自动跑一遍这个测试。

@@ -18,6 +18,11 @@ DASH_DIR="/mnt/us/kindle-dash"
 DASH_IMG="$DASH_DIR/current.png"
 DASH_LOG="$DASH_DIR/dash.log"
 
+# 看板模式下多久换一次图（秒）。1800 = 30 分钟
+# 云端每 30 分钟重新渲染一次，这里跟着对齐就行；调小只会更耗电，不会更及时
+REFRESH_SEC=1800
+KEEPER_PID="$DASH_DIR/.keeper.pid"
+
 # KUAL 菜单装到哪里
 KUAL_EXT_DIR="/mnt/us/extensions/kindle-dash"
 
@@ -31,8 +36,7 @@ SCREEN_H=1448
 LOG_MAX_LINES=200
 
 # ---- 系统路径 ----
-# 这两项本来该写死在脚本里，但抽成变量有两个好处：
+# 本来该写死在脚本里，但抽成变量有两个好处：
 # 一是不同的固件版本路径有差异，出问题时改这里就行，不用翻脚本；
 # 二是可以指到空壳桩程序上，在电脑上把整套流程跑一遍再碰真机。
 FRAMEWORK_INIT="/etc/init.d/framework"    # 原生系统界面（看板模式下要停掉它）
-CRON_FILE="/etc/crontab/root"             # 定时任务文件

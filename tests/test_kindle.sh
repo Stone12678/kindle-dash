@@ -79,18 +79,39 @@ exit 0
 EOF
     printf '#!/bin/sh\necho "framework $*" >> "$STUB_DIR/framework.log"\n' > "$STUB/framework"
     printf '#!/bin/sh\nexit 0\n' > "$STUB/lipc-set-prop"
-    printf '#!/bin/sh\nexit 0\n' > "$STUB/mntroot"
+    # mntroot 记账：脚本一旦碰系统分区，测试要能发现
+    printf '#!/bin/sh\necho "$*" >> "$STUB_DIR/mntroot.log"\n' > "$STUB/mntroot"
     printf '#!/bin/sh\nexit 0\n' > "$STUB/killall"
     printf '#!/bin/sh\nexit 0\n' > "$STUB/crond"
-    # sleep 也桩掉：dash.sh 的 on 分支里有 sleep 2，不然每个用例都多等 2 秒
-    printf '#!/bin/sh\nexit 0\n' > "$STUB/sleep"
+    # sleep 桩：尊重参数，只把 on 分支里的 sleep 2 缩成 0.05 秒。
+    # 不能一律 exit 0——那样刷新循环会空转，每个用例的刷屏次数全乱；
+    # 也不能一律短睡——循环会以 0.2 秒一轮疯狂刷屏，同样污染计数。
+    printf '#!/bin/sh\nif [ "$1" = "2" ]; then /bin/sleep 0.05; else /bin/sleep "${1:-1}"; fi\n' > "$STUB/sleep"
     chmod +x "$STUB"/*
 
     PNG_OUT="$STUB/good.png" python -c "import os; from PIL import Image; Image.new('L',(1072,1448),255).save(os.environ['PNG_OUT'])"
 }
 
+# 杀掉可能还在跑的刷新循环。
+# 必须在重置沙箱之前做：循环进程的 cwd 就在沙箱目录里，
+# 不杀干净 rm -rf 会报 "Device or resource busy"，后面的用例全被污染。
+kill_keepers() {
+    if [ -f "$SB/dash/.keeper.pid" ]; then
+        kill "$(cat "$SB/dash/.keeper.pid")" 2>/dev/null
+    fi
+    local p
+    for p in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+        [ -r "/proc/$p/cmdline" ] || continue
+        if tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q "dash.sh loop"; then
+            kill "$p" 2>/dev/null
+        fi
+    done
+    sleep 0.3 2>/dev/null || true
+}
+
 # 每次用例前重置沙箱，用指定的 URL 生成 config.sh
 reset_sandbox() {
+    kill_keepers
     local url="${1:-https://example.com/render/dashboard.png}"
     local fallback="${2:-}"
     local bust="${3:-1}"
@@ -113,7 +134,8 @@ SCREEN_W=1072
 SCREEN_H=1448
 LOG_MAX_LINES=200
 FRAMEWORK_INIT="$STUB/framework"
-CRON_FILE="$SB/etc/crontab"
+REFRESH_SEC=3600
+KEEPER_PID="\$DASH_DIR/.keeper.pid"
 EOF
     rm -f "$STUB"/*.log
     echo good > "$STUB/curl_mode"
@@ -243,15 +265,25 @@ reset_sandbox "https://example.com/d.png"
 code=$( cd "$SB" && STUB_DIR="$STUB" PATH="$STUB:$PATH" sh "$SB/kindle/install.sh" >"$TMP/inst2" 2>&1; echo $? )
 eq "安装成功" "$code" "0"
 isfile "KUAL 菜单已就位" "$SB/kual/menu.json"
-grep -q "dash.sh update" "$SB/etc/crontab" && ok "写了定时任务" || bad "没写定时任务"
-eq "定时任务行数为 1" "$(grep -c 'dash.sh update' "$SB/etc/crontab")" "1"
+isfile "安装日志已写出" "$SB/dash/install.log"
 
-# 再跑一次不能重复追加
+# 关键防线：安装全过程绝不能碰系统分区。
+# 早先的版本会 mntroot rw 往 /etc/crontab 写定时任务，写到一半断电就变砖。
+# grep 只看非注释行：脚本头部注释里提到「早期版本会 mntroot rw」不算违规
+if grep -v '^\s*#' "$PROJ/kindle/install.sh" "$PROJ/kindle/dash.sh" | grep -q "mntroot"; then
+    bad "脚本里还有 mntroot，会把根分区挂成可写"
+else
+    ok "脚本里没有 mntroot"
+fi
+if [ -f "$STUB/mntroot.log" ]; then
+    bad "安装过程中调用了 mntroot：$(cat "$STUB/mntroot.log")"
+else
+    ok "安装全程没调用 mntroot"
+fi
+
 code=$( cd "$SB" && STUB_DIR="$STUB" PATH="$STUB:$PATH" sh "$SB/kindle/install.sh" >"$TMP/inst3" 2>&1; echo $? )
 eq "重复安装不报错" "$code" "0"
-eq "定时任务没有重复追加" "$(grep -c 'dash.sh update' "$SB/etc/crontab")" "1"
 
-echo
 echo "== 11. 破 CDN 缓存的开关 =="
 reset_sandbox "https://example.com/d.png" "" 1
 run_dash on >/dev/null
@@ -277,6 +309,46 @@ if grep -q 'raw=1&t=' "$STUB/curl.log"; then
 else
     bad "已有查询参数时拼接错了（$(head -1 "$STUB/curl.log")）"
 fi
+
+echo
+echo "== 12. 刷新循环：开看板启动，退看板停止 =="
+reset_sandbox "https://example.com/d.png"
+# 这个用例要改小刷新周期，让循环在测试时间内真的跑几轮
+sed -i 's/^REFRESH_SEC=.*/REFRESH_SEC=1/' "$SB/kindle/config.sh"
+
+before=$(fbcalls)
+code=$(run_dash on)
+eq "开启成功" "$code" "0"
+isfile "循环进程号已记录" "$SB/dash/.keeper.pid"
+KPID=$(cat "$SB/dash/.keeper.pid" 2>/dev/null)
+if [ -n "$KPID" ] && kill -0 "$KPID" 2>/dev/null; then
+    ok "循环进程活着"
+else
+    bad "循环没起来（PID=${KPID:-空}）"
+fi
+
+sleep 3
+after=$(fbcalls)
+if [ "$after" -gt "$((before + 1))" ]; then
+    ok "循环在自动刷新（开看板 1 次，之后又刷了 $((after - before - 1)) 次）"
+else
+    bad "循环没在刷新（$before -> $after 次）"
+fi
+
+code=$(run_dash off)
+eq "退出成功" "$code" "0"
+sleep 2
+if [ -n "$KPID" ] && kill -0 "$KPID" 2>/dev/null; then
+    bad "退出后循环还在跑，会一直耗电"
+else
+    ok "退出后循环已停止"
+fi
+if [ -f "$SB/dash/.active" ]; then bad ".active 没清掉"; else ok ".active 已清除"; fi
+
+# 退出后再等一个周期，确认屏幕次数不再增长（循环真的停了，而不是只断了标记）
+stopped=$(fbcalls)
+sleep 2
+eq "退出后不再刷新屏幕" "$(fbcalls)" "$stopped"
 
 # ================================================================
 echo
