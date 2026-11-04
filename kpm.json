@@ -1,0 +1,27 @@
+{
+  "manifest_version": 2,
+  "id": "stone-kindle-dash",
+  "name": "Kindle Dash",
+  "description": "Kindle 看板相关包。",
+  "packages": {
+    "kindle-dash": {
+      "name": "Kindle Dash",
+      "author": "Stone",
+      "description": "把闲置 Kindle 变成电子墨水信息看板：大时钟、天气预警、未来 6 天、在读进度，配一只猫。",
+      "artifacts": [
+        {
+          "url": "https://cdn.jsdelivr.net/gh/Stone12678/kindle-dash@main/dist/kindle-dash_1.0.0_kindlehf.kpkg",
+          "version": [
+            1,
+            0,
+            0
+          ],
+          "dependencies": [],
+          "supported_platforms": [
+            "kindlehf"
+          ]
+        }
+      ]
+    }
+  }
+}
