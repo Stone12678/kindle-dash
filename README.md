@@ -16,6 +16,35 @@ GitHub Actions（每 30 分钟）
 
 ---
 
+## 零、没有数据线也能装（SpiderCat 越狱）
+
+SpiderCat（固件 5.16.3–5.19.5）全程在设备上完成，不需要电脑。它顺带装了两个东西，正好被这里用上：
+
+| 东西 | 用途 |
+|---|---|
+| `fbink` | 直接往墨水屏画图，装在 `libkh` 下，**不在 PATH 上**（`config.sh` 会自动找） |
+| `SH_Integration` | 把 `documents/` 里的 `.sh` 索引成一本书，**点开就以 root 运行** |
+
+于是安装变成「下载一本小书 → 点开」：
+
+1. Kindle 浏览器打开 `https://tinyurl.com/2yxcuzvv`
+   （直链：`github.com/Stone12678/kindle-dash/releases/download/v1/KindleDash-Install.sh`）
+2. 提示下载后回书架，找到《Kindle 看板 安装》点开
+3. 它会下载程序包、解压、探测依赖，并在书架上生成三本书：
+   《看板 - 启动》《看板 - 退出》《看板 - 自检》
+
+**关键坑：root 不持久。** 重启后 `;kpm` 会静默失效，scriptlet 也不再是 root。
+安装前先打开 **SpiderCat 那本书**把权限拿回来，再点安装书——安装脚本第一件事就是打印 `uid`，不是 0 会直接停下。
+
+改了设备端代码要重新发包：
+
+```bash
+sh tools/make-package.sh          # 校验 LF/语法 + 打 dist/kindle-dash.tar.gz
+gh release upload v1 dist/kindle-dash.tar.gz --clobber
+```
+
+---
+
 ## 一、先让云端跑通（不用碰 Kindle）
 
 ### 1. 建仓库并推上去

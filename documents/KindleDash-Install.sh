@@ -17,7 +17,7 @@
 # 只写 /mnt/us 用户分区，不碰系统分区。
 # ============================================================
 
-PKG_URL="https://github.com/Stone12678/kindle-dash/releases/download/v1/kindle-dash.tar.gz"
+PKG_URL="https://cdn.jsdelivr.net/gh/Stone12678/kindle-dash@main/dist/kindle-dash.tar.gz"
 PKG2_URL="https://raw.githubusercontent.com/Stone12678/kindle-dash/main/dist/kindle-dash.tar.gz"
 
 DEST="/mnt/us/kindle-dash"
