@@ -13,3 +13,4 @@ data/reading.json
 # KPM 打包中间产物
 build/
 build/
+dist/serve/*.zip

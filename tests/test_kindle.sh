@@ -79,10 +79,18 @@ exit 0
 EOF
     printf '#!/bin/sh\necho "framework $*" >> "$STUB_DIR/framework.log"\n' > "$STUB/framework"
     printf '#!/bin/sh\nexit 0\n' > "$STUB/lipc-set-prop"
+    # 电源状态桩：默认"醒着"，用例想模拟按下电源键就把 powerd_status 改成 Suspended
+    cat > "$STUB/lipc-get-prop" <<'EOF'
+#!/bin/sh
+cat "$STUB_DIR/powerd_status" 2>/dev/null || echo "Active"
+EOF
     # mntroot 记账：脚本一旦碰系统分区，测试要能发现
     printf '#!/bin/sh\necho "$*" >> "$STUB_DIR/mntroot.log"\n' > "$STUB/mntroot"
     printf '#!/bin/sh\nexit 0\n' > "$STUB/killall"
     printf '#!/bin/sh\nexit 0\n' > "$STUB/crond"
+    # Git Bash 没有 setsid（Linux 上才有），这里用桩代跑，
+    # 否则 on 分支 fork 出来的 boot 进程根本不会启动，测试全是假失败
+    printf '#!/bin/sh\nexec "$@"\n' > "$STUB/setsid"
     # sleep 桩：尊重参数，只把 on 分支里的 sleep 2 缩成 0.05 秒。
     # 不能一律 exit 0——那样刷新循环会空转，每个用例的刷屏次数全乱；
     # 也不能一律短睡——循环会以 0.2 秒一轮疯狂刷屏，同样污染计数。
@@ -134,11 +142,14 @@ SCREEN_W=1072
 SCREEN_H=1448
 LOG_MAX_LINES=200
 FRAMEWORK_INIT="$STUB/framework"
+FBINK="$STUB/fbink"
 REFRESH_SEC=3600
 KEEPER_PID="\$DASH_DIR/.keeper.pid"
+BOOT_DELAY=0
 EOF
     rm -f "$STUB"/*.log
     echo good > "$STUB/curl_mode"
+    echo "Active" > "$STUB/powerd_status"
 }
 
 # 调 dash.sh，返回退出码
@@ -146,6 +157,17 @@ run_dash() {
     ( cd "$SB" && STUB_DIR="$STUB" PATH="$STUB:$PATH" sh "$SB/kindle/dash.sh" "$@" ) >"$TMP/out" 2>&1
     echo $?
 }
+# on 是"甩出去就返回"的，真正干活的是后台的 boot 进程。
+# 断言之前先等它把刷新循环起起来，否则读到的是半成品状态。
+settle() {
+    local i
+    for i in $(seq 1 80); do
+        [ -f "$SB/dash/.keeper.pid" ] && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
 fbcalls() {
     if [ -f "$STUB/fbink.log" ]; then wc -l < "$STUB/fbink.log" | tr -d ' '; else echo 0; fi
 }
@@ -184,7 +206,7 @@ nofile "没有生成 .active" "$SB/dash/.active"
 
 echo
 echo "== 2. 开启看板：停系统界面 + 下载 + 刷新 =="
-code=$(run_dash on)
+code=$(run_dash on); settle
 eq "on 返回 0" "$code" "0"
 nz "停掉了原生系统界面" "$STUB/framework.log"
 isfile "生成了 .active 标志" "$SB/dash/.active"
@@ -228,7 +250,7 @@ echo
 echo "== 6. 主地址挂了要自动换备用地址 =="
 reset_sandbox "https://primary.example.com/d.png" "https://backup.example.com/d.png"
 echo primary_fail > "$STUB/curl_mode"
-code=$(run_dash on)
+code=$(run_dash on); settle
 eq "切到备用地址后成功" "$code" "0"
 if [ "$(grep -c 'example.com' "$STUB/curl.log")" = "2" ]; then
     ok "先试了主地址、再试备用地址"
@@ -286,7 +308,7 @@ eq "重复安装不报错" "$code" "0"
 
 echo "== 11. 破 CDN 缓存的开关 =="
 reset_sandbox "https://example.com/d.png" "" 1
-run_dash on >/dev/null
+run_dash on >/dev/null; settle
 if grep -q '?t=' "$STUB/curl.log"; then
     ok "开启后地址带上了时间戳，绕过 CDN 缓存"
 else
@@ -294,7 +316,7 @@ else
 fi
 
 reset_sandbox "https://example.com/d.png" "" 0
-run_dash on >/dev/null
+run_dash on >/dev/null; settle
 if grep -q '?t=' "$STUB/curl.log"; then
     bad "关掉开关后不该再加时间戳"
 else
@@ -303,7 +325,7 @@ fi
 
 # 备用地址本身带查询参数时，要接 & 而不是再补一个 ?
 reset_sandbox "https://example.com/d.png?raw=1" "" 1
-run_dash on >/dev/null
+run_dash on >/dev/null; settle
 if grep -q 'raw=1&t=' "$STUB/curl.log"; then
     ok "原地址已有参数时正确用 & 追加"
 else
@@ -317,7 +339,7 @@ reset_sandbox "https://example.com/d.png"
 sed -i 's/^REFRESH_SEC=.*/REFRESH_SEC=1/' "$SB/kindle/config.sh"
 
 before=$(fbcalls)
-code=$(run_dash on)
+code=$(run_dash on); settle
 eq "开启成功" "$code" "0"
 isfile "循环进程号已记录" "$SB/dash/.keeper.pid"
 KPID=$(cat "$SB/dash/.keeper.pid" 2>/dev/null)
@@ -349,6 +371,73 @@ if [ -f "$SB/dash/.active" ]; then bad ".active 没清掉"; else ok ".active 已
 stopped=$(fbcalls)
 sleep 2
 eq "退出后不再刷新屏幕" "$(fbcalls)" "$stopped"
+
+echo
+echo "== 13. 主地址挂了要接着试后面的来源 =="
+reset_sandbox "https://primary.example.com/d.png" "" 0
+printf 'DASH_EXTRA_URLS="https://extra.example.com/d.png"\n' >> "$SB/kindle/config.sh"
+echo primary_fail > "$STUB/curl_mode"
+code=$(run_dash on); settle
+eq "换到后面那个来源后成功" "$code" "0"
+if [ "$(grep -c 'example.com' "$STUB/curl.log")" = "2" ]; then
+    ok "先试主地址、再试扩展来源"
+else
+    bad "没有依次尝试（curl 调用 $(grep -c 'example.com' "$STUB/curl.log") 次）"
+fi
+png "最终拿到的是有效 PNG" "$SB/dash/current.png"
+
+echo
+echo "== 14. 记住上次成功的来源，下一轮先试它 =="
+eq "记录的是实际成功的地址" "$(cat "$SB/dash/.lasturl" 2>/dev/null)" "https://extra.example.com/d.png"
+rm -f "$STUB/curl.log"
+run_dash update >/dev/null
+first="$(head -1 "$STUB/curl.log")"
+case "$first" in
+    *extra.example.com*) ok "下一轮先试上次成功的地址，不再先撞被墙的" ;;
+    *) bad "没有优先用上次成功的地址（首条是 $first）" ;;
+esac
+
+echo
+echo "== 15. 按电源键 = 退出看板 =="
+# 这项对应真机上的唯一出口：看板模式下书架点不到，只能靠电源键退出。
+reset_sandbox "https://example.com/d.png"
+sed -i 's/^REFRESH_SEC=.*/REFRESH_SEC=1/' "$SB/kindle/config.sh"
+run_dash on >/dev/null; settle
+# 等刷新循环真的起来（boot 分支里有一个 8 秒的等待）
+for _ in $(seq 1 200); do
+    [ -f "$SB/dash/.keeper.pid" ] && break
+    sleep 0.1
+done
+KPID=$(cat "$SB/dash/.keeper.pid" 2>/dev/null)
+if [ -n "$KPID" ]; then ok "循环已启动"; else bad "循环没起来，后面的判断没意义"; fi
+
+# 模拟用户按下电源键
+echo "Suspended" > "$STUB/powerd_status"
+for _ in $(seq 1 100); do
+    [ -f "$SB/dash/.active" ] || break
+    sleep 0.1
+done
+if [ -f "$SB/dash/.active" ]; then
+    bad "按了电源键但看板没退出（用户会被困住）"
+else
+    ok "检测到休眠后自动退出看板"
+fi
+# off 是异步跑的：先删 .active，再停循环，最后才拉起系统界面。
+# 所以这里要等一小会儿，不能删完标志就立刻断言，否则读到的是半成品。
+for _ in $(seq 1 60); do
+    grep -q "framework start" "$STUB/framework.log" 2>/dev/null && break
+    sleep 0.1
+done
+if grep -q "framework start" "$STUB/framework.log" 2>/dev/null; then
+    ok "书架已经还回来了"
+else
+    bad "没有恢复系统界面，醒来还是黑屏"
+fi
+if [ -n "$KPID" ] && kill -0 "$KPID" 2>/dev/null; then
+    bad "退出后循环还在跑"
+else
+    ok "刷新循环已结束"
+fi
 
 # ================================================================
 echo
