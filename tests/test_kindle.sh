@@ -25,7 +25,17 @@ STUB="$TMP/stub"           # 桩程序住的地方
 PASS=0
 FAIL=0
 
-cleanup() { rm -rf "$TMP"; }
+# 只在最外层 shell 退出时清沙箱。
+# 坑：$(run_dash xxx) 和 ( cd ... ) 这类子 shell 退出时也会触发 EXIT trap，
+# 于是每跑一条命令就把整个沙箱删一次。运气好时 rm 很快返回、后续 reset 又
+# 重建，看不出问题；一旦后台还有进程占着目录，rm 就报 "Device or resource
+# busy" 并卡住，整轮测试挂死。
+# 判据用 BASH_SUBSHELL 而不是 BASHPID：Windows 上的 bash 里 BASHPID 在子
+# shell 中仍返回 $$，等于没判断（实测日志里出现过 13498 = 13498）。
+cleanup() {
+    [ "${BASH_SUBSHELL:-0}" = "0" ] || return 0
+    rm -rf "$TMP" 2>/dev/null
+}
 trap cleanup EXIT
 
 # ---------------- 断言 ----------------
@@ -46,8 +56,15 @@ png()  { # 文件头必须是 PNG
 setup_stubs() {
     mkdir -p "$STUB"
     # fbink：记录每次调用，-i 时假装回报尺寸
+    # --help 不算一次"刷屏"，单独走一个分支：脚本探测矢量字体支持时会问它，
+    # 如果也记进 fbink.log，后面所有按次数断言的用例全会被带偏。
     cat > "$STUB/fbink" <<'EOF'
 #!/bin/sh
+case " $* " in
+    *" --help "*)
+        printf '  -t, --truetype ...\n  -S, --size\n  -k, --cls\n  -s, --refresh\n'
+        exit 0 ;;
+esac
 echo "fbink $*" >> "$STUB_DIR/fbink.log"
 case " $* " in *" -i "*) echo "dimensions: 1072x1448";; esac
 exit 0
@@ -107,22 +124,33 @@ kill_keepers() {
     if [ -f "$SB/dash/.keeper.pid" ]; then
         kill "$(cat "$SB/dash/.keeper.pid")" 2>/dev/null
     fi
-    local p
-    for p in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
-        [ -r "/proc/$p/cmdline" ] || continue
-        if tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q "dash.sh loop"; then
-            kill "$p" 2>/dev/null
-        fi
+    # 扫 /proc 找残留。用 glob 直接展开而不是 $(ls /proc | grep 数字)：
+    # 后者每次要 fork 两个进程，一台机器几千个 pid 时单这一项就能把
+    # 整轮测试拖到几分钟。glob 展开 + 内建 case 匹配不开新进程，快一个量级。
+    local f p cmd
+    for f in /proc/[0-9]*/cmdline; do
+        [ -r "$f" ] || continue
+        cmd="$(tr '\0' ' ' < "$f" 2>/dev/null)"
+        case "$cmd" in
+            # boot 也要杀：它比 loop 早一步存在于后台，还在 sleep 时同样占着沙箱目录
+            *"dash.sh loop"*|*"dash.sh boot"*)
+                p="${f#/proc/}"; p="${p%/cmdline}"
+                kill "$p" 2>/dev/null
+                ;;
+        esac
     done
     sleep 0.3 2>/dev/null || true
 }
 
 # 每次用例前重置沙箱，用指定的 URL 生成 config.sh
+# 第 4 个参数控时钟：默认 0（关掉），老用例的"刷屏次数"断言才不会被多出来的
+# 清区/写字/刷新三次调用打乱。测时钟的用例显式传 1。
 reset_sandbox() {
     kill_keepers
     local url="${1:-https://example.com/render/dashboard.png}"
     local fallback="${2:-}"
     local bust="${3:-1}"
+    local clock="${4:-0}"
     rm -rf "$SB"
     mkdir -p "$SB/kindle" "$SB/downloads" "$SB/kual" "$SB/etc"
     cp "$PROJ/kindle/dash.sh"   "$SB/kindle/dash.sh"
@@ -146,6 +174,8 @@ FBINK="$STUB/fbink"
 REFRESH_SEC=3600
 KEEPER_PID="\$DASH_DIR/.keeper.pid"
 BOOT_DELAY=0
+CLOCK_ON="$clock"
+CLOCK_FONTS="$SB/fonts/fake.ttf"
 EOF
     rm -f "$STUB"/*.log
     echo good > "$STUB/curl_mode"
@@ -437,6 +467,68 @@ if [ -n "$KPID" ] && kill -0 "$KPID" 2>/dev/null; then
     bad "退出后循环还在跑"
 else
     ok "刷新循环已结束"
+fi
+
+echo
+echo "== 16. 时间由设备自己画 =="
+# 云端不再画时间：GitHub 免费版的 cron 实测 4~7 小时才跑一次，印在图上的
+# 数字会停住。改由设备往留白处叠一行，每分钟更新。
+# 这里验四件事：认得出矢量字体、写之前先擦干净、不闪两下、同一分钟不重复刷。
+reset_sandbox "https://example.com/d.png" "" 1 1
+mkdir -p "$SB/fonts" && : > "$SB/fonts/fake.ttf"
+echo good > "$STUB/curl_mode"
+run_dash on >/dev/null; settle
+
+eq "探测到矢量字体模式" "$(cat "$SB/dash/.clockmode" 2>/dev/null)" "ot"
+if grep -q -- "-t regular=$SB/fonts/fake.ttf" "$STUB/fbink.log"; then
+    ok "用矢量字体写字（不是把点阵放大）"
+else
+    bad "没走矢量字体，字会是一堆粗方块"
+fi
+if grep -q -- "-k top=" "$STUB/fbink.log"; then
+    ok "写字前先清掉那块（20:45 换成 11:11 不留残影）"
+else
+    bad "没清区，换数字会留残影"
+fi
+if grep -q -- ' -b$' "$STUB/fbink.log"; then
+    ok "清区和写字只改缓冲不刷屏（不会闪两下）"
+else
+    bad "清区或写字直接刷了屏，每分钟会闪两下"
+fi
+if grep -qE -- '-s top=' "$STUB/fbink.log"; then
+    ok "最后只刷新那一小块"
+else
+    bad "没有只刷区域，等于每次全屏闪"
+fi
+eq "记下了这次画的时间" "$(cat "$SB/dash/.clocklast" 2>/dev/null)" "$(date '+%H:%M')"
+
+before=$(fbcalls)
+run_dash clock >/dev/null
+eq "同一分钟内不重复刷" "$(fbcalls)" "$before"
+run_dash clock --force >/dev/null
+if [ "$(fbcalls)" -gt "$before" ]; then
+    ok "--force 能强制重画（调位置时用得上）"
+else
+    bad "--force 没生效，改完 CLOCK_TOP 看不出变化"
+fi
+
+echo
+echo "== 17. 时钟的位置和云端图要对得上 =="
+# 这两条是防回归的：以后改版式，很容易忘了同步改另一边。
+clr="$(grep '^CLOCK_CLEAR=' "$PROJ/kindle/config.sh" | head -1)"
+c_top=$(printf '%s' "$clr" | sed -n 's/.*top=\([0-9]*\).*/\1/p')
+c_h=$(printf '%s' "$clr" | sed -n 's/.*height=\([0-9]*\).*/\1/p')
+c_bottom=$((c_top + c_h))
+# render.py 里日期行基线 258、字号 46，字顶约 212；超过就把日期刷掉一块
+if [ "$c_bottom" -le 212 ]; then
+    ok "清除区底边 $c_bottom ≤ 212，不碰日期行"
+else
+    bad "清除区底边 $c_bottom 压到日期行了（要 ≤212）"
+fi
+if grep -q 'now.strftime("%H:%M")' "$PROJ/render.py"; then
+    bad "render.py 还在画时间，会和设备时钟叠成两层"
+else
+    ok "云端图确认没画时间"
 fi
 
 # ================================================================

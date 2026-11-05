@@ -364,7 +364,12 @@ def render(now: datetime | None = None) -> Path:
     code = int(code) if code is not None else None
 
     # ===== 顶部: 时间 =====
-    text(d, (M, 200), now.strftime("%H:%M"), 168, bold=True)
+    # 这里故意留白, 不画时间。原因:
+    #   GitHub 免费版的定时任务实测 4~7 小时才跑一次, 印在图上的时间会停住。
+    #   所以时间交给 Kindle 自己用 fbink 叠上去(见 kindle/dash.sh 的 clock_text),
+    #   每分钟一刷, 永远准。这块空白就是给它留的位置:
+    #   CLOCK_TOP=56 / CLOCK_LEFT=56 / px=140, 清区 top=44,left=44,560x164。
+    #   改动这里的版式时请同步改 kindle/config.sh 里那几项。
 
     # 天气: 图标 + 大字号温度 + 文字
     draw_weather_icon(d, cx=752, cy=146, s=40, code=code)
@@ -460,7 +465,8 @@ def render(now: datetime | None = None) -> Path:
     else:
         greet = weather_mood(code)[1]
     text(d, (M, 1396), greet, 34, bold=True)
-    text(d, (W - M, 1394), "每 30 分钟自动刷新", 22, LIGHT, anchor="rs")
+    # 时间由设备自己画, 所以这里不再写"每 30 分钟自动刷新"
+    text(d, (W - M, 1394), "时钟实时 · 画面每 30 分钟", 22, LIGHT, anchor="rs")
 
     img.save(OUT)
     print(f"已生成: {OUT}  ({img.size[0]}x{img.size[1]})  天气码={code}")

@@ -161,6 +161,32 @@ DASH_URL="https://raw.githubusercontent.com/你的用户名/你的仓库名/rend
 
 检测方式是查 `lipc-get-prop com.lab126.powerd status`，返回里带 `Suspended` 或 `Screen Saver` 就算休眠。读不到这个属性时一律当作"醒着"，看板照常跑，不会误退。
 
+### 5. 时间为什么是设备自己画的
+
+云端那张图**故意不画时间**，顶部左侧留一块空白，由 Kindle 自己用 fbink 叠上去，每分钟更新一次。
+
+原因很实际：GitHub 免费版的定时任务不保证频率，实测间隔是 **4 到 7 小时**（设的是 30 分钟）。如果时间印在图上，屏幕上的钟会停在那儿好几个小时。而天气、书、猫这几样半小时更新一次完全够用，只有时间不能忍。
+
+于是分工变成：**云端负责所有中文和插画，设备只负责那串数字**。数字用 Kindle 自带的 Caecilia 衬线体渲染，和猫的墨线风格意外地搭。
+
+几个实现细节，改这块之前值得知道：
+
+- **擦干净**：`20:45` 换成 `11:11` 时字窄了一圈，不清会留残影。所以每帧先用 `fbink -k` 把固定那块刷白，再写字。
+- **不闪两下**：清区和写字都带 `-b`（只改缓冲不刷屏），最后一次 `-s` 只刷新那一小块。否则每分钟要闪两次屏。
+- **不重复刷**：同一分钟内重复调用直接跳过，靠 `.clocklast` 记着上次画的是几点几分。
+- **矢量字体探测**：`clock_probe()` 先问 `fbink --help` 里有没有 `--truetype`，再按 `CLOCK_FONTS` 列表找存在的字体文件。都找不到就退回内置点阵字（`-S` 放大），能显示但会比较粗。结果缓存在 `.clockmode`，不会每次重启都重扫。
+
+想调位置或大小，改 `kindle/config.sh` 里这几项，然后：
+
+```bash
+sh dash.sh clock --force
+```
+
+- `CLOCK_PX` 字高（像素），`CLOCK_TOP` / `CLOCK_LEFT` 左上角坐标
+- `CLOCK_CLEAR` 是每帧要刷白的矩形，**必须完整盖住时间、又不能压到下面的日期行**
+
+真机上不确定参数效果时，`sh dash.sh test` 会把当前用的模式、字体路径、坐标都打出来。
+
 ---
 
 ## 四、日常怎么改
@@ -169,8 +195,11 @@ DASH_URL="https://raw.githubusercontent.com/你的用户名/你的仓库名/rend
 |---|---|
 | 在读的书名 / 章节 / 进度 | `data/schedule.json` 里的 `_reading` |
 | 版式、字号、配色深浅 | `render.py`，所有坐标都在 `render()` 里 |
+| 时钟的字号 / 位置 | `kindle/config.sh` 的 `CLOCK_PX`、`CLOCK_TOP`、`CLOCK_LEFT`、`CLOCK_CLEAR` |
 | 换猫的图 / 加新姿态 | PNG 放进 `assets/cats/`，改 `CAT_ARTS` 字典和 `pick_cat_mood()` 的时段规则 |
 | 换成别的机型 | `kindle/config.sh` 里的 `SCREEN_W/SCREEN_H`；PW4 之外要重新调版式 |
+
+> 改时钟位置时注意两边要对得上：`render.py` 里给时间留白的那块，和 `config.sh` 里 `CLOCK_*` 的坐标是配套的。测试里有一条专门盯着 `CLOCK_CLEAR` 的底边不许越过 212（那是日期行的字顶），改歪了会立刻报红。
 
 改完提交，等下一次 Actions 跑完（或手动 Run），Kindle 半小时内自动跟上。
 

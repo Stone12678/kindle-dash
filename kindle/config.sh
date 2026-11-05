@@ -37,6 +37,29 @@ DASH_LOG="$DASH_DIR/dash.log"
 REFRESH_SEC=1800
 KEEPER_PID="$DASH_DIR/.keeper.pid"
 
+# ---- 时钟 ----
+# 云端图故意不画时间（GitHub 免费版的定时任务实测 4~7 小时才跑一次，
+# 印在图上的时间会停住），改由设备自己往空白处叠一行时间，每分钟刷一次。
+# 位置必须和 render.py 里留白的位置对齐，改版式时两边一起改。
+CLOCK_ON=1                 # 设 0 关掉设备时钟
+CLOCK_PX=140               # 矢量字体的像素高度
+CLOCK_TOP=56               # 文字顶边 y
+CLOCK_LEFT=56              # 文字左边 x
+CLOCK_CLEAR="top=44,left=44,width=560,height=164"   # 每帧先刷白这块再写字
+# 内置点阵字体的退路：-S 放大倍数，CLOCK_IBM_X/Y 是像素微调
+CLOCK_SCALE=10
+CLOCK_IBM_X=56
+CLOCK_IBM_Y=48
+
+# 时钟字体候选。Kindle 原生自带的 Caecilia 数字很好看，优先用它；
+# 装了 KOReader 的话还能用它的 Noto。都不存在就退回内置点阵字。
+CLOCK_FONTS="/usr/java/lib/fonts/Caecilia_LT_75_Bold.ttf
+/usr/java/lib/fonts/Caecilia_LT_65_Medium.ttf
+/usr/java/lib/fonts/Caecilia_LT_67_Cond_Medium.ttf
+/mnt/us/koreader/fonts/noto/NotoSans-Bold.ttf
+/mnt/us/koreader/fonts/noto/NotoSans-Regular.ttf
+/mnt/us/system/fonts/STHeiti_Medium.ttf"
+
 # KUAL 菜单装到哪里
 KUAL_EXT_DIR="/mnt/us/extensions/kindle-dash"
 

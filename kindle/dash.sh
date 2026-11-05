@@ -24,6 +24,17 @@ CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-8}"    # 连不上就快点换下一个地�
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-30}"
 DASH_EXTRA_URLS="${DASH_EXTRA_URLS:-}"
 BOOT_DELAY="${BOOT_DELAY:-8}"                # 启动后等这么久再接管屏幕（给 scriptlet 退出的时间）
+CLOCK_ON="${CLOCK_ON:-1}"                    # 设备自己画时钟
+CLOCK_PX="${CLOCK_PX:-140}"
+CLOCK_TOP="${CLOCK_TOP:-56}"
+CLOCK_LEFT="${CLOCK_LEFT:-56}"
+CLOCK_CLEAR="${CLOCK_CLEAR:-top=44,left=44,width=560,height=164}"
+CLOCK_SCALE="${CLOCK_SCALE:-10}"
+CLOCK_IBM_X="${CLOCK_IBM_X:-56}"
+CLOCK_IBM_Y="${CLOCK_IBM_Y:-48}"
+CLOCK_FONTS="${CLOCK_FONTS:-/usr/java/lib/fonts/Caecilia_LT_75_Bold.ttf}"
+CLOCK_LAST="$DASH_DIR/.clocklast"            # 上次画的是几点几分
+CLOCK_MODE_FILE="$DASH_DIR/.clockmode"       # 探测结果缓存：ot 或 ibm
 # 轮询间隔不能比刷新周期还长，否则测试里把周期改成 1 秒就不刷新了
 [ "$POLL_SEC" -gt "$REFRESH_SEC" ] 2>/dev/null && POLL_SEC="$REFRESH_SEC"
 
@@ -92,6 +103,72 @@ $DASH_EXTRA_URLS"
 # ---------- 显示 ----------
 # -f 走 GC16 全刷：每 30 分钟闪一下不碍事，换来的是不会有残影一层层叠上去。
 # 想减少闪烁就把 -f 去掉，但记得每天至少全刷一次清残影。
+# ---------- 时钟 ----------
+# 云端那张图已经不再画时间（GitHub 免费版的 cron 实测 4~7 小时才跑一次，
+# 印在图上的数字会停住）。所以时间改成设备自己往留白处叠一行，
+# 每分钟更新一次，永远准。
+#
+# 难点不在"写字"，在两件小事：
+#   1. 换数字要擦干净。20:45 换成 11:11 时字窄了一圈，不擦会留残影；
+#   2. 不能闪两下。清区一次、写字一次，如果各刷一次屏，每分钟闪两下很烦。
+# 解法是先 -k 清区、再写，两次都带 -b（只改缓冲不刷屏），最后 -s 一次刷新。
+clock_probe() {
+    if [ -s "$CLOCK_MODE_FILE" ]; then
+        CLOCK_MODE="$(cat "$CLOCK_MODE_FILE" 2>/dev/null)"
+        if [ -n "$CLOCK_MODE" ]; then
+            CLOCK_FONT="$(cat "$DASH_DIR/.clockfont" 2>/dev/null)"
+            return 0
+        fi
+    fi
+    CLOCK_MODE="ibm"
+    CLOCK_FONT=""
+    # 先确认这个 fbink 编进了矢量字体支持（没有的话 -t 会被当成别的选项）
+    if "$FBINK" --help 2>&1 | grep -q -- "--truetype"; then
+        for c_f in $CLOCK_FONTS; do
+            if [ -f "$c_f" ]; then
+                CLOCK_FONT="$c_f"
+                CLOCK_MODE="ot"
+                break
+            fi
+        done
+    fi
+    printf '%s\n' "$CLOCK_MODE" > "$CLOCK_MODE_FILE" 2>/dev/null
+    printf '%s\n' "$CLOCK_FONT" > "$DASH_DIR/.clockfont" 2>/dev/null
+    log "时钟模式：$CLOCK_MODE ${CLOCK_FONT:-(内置点阵)}"
+    return 0
+}
+
+clock_text() {
+    [ "$CLOCK_ON" = "1" ] || return 0
+    [ -n "$FBINK" ] || return 0
+    [ -f "$DASH_IMG" ] || return 0
+
+    c_now="$(date '+%H:%M')"
+    # 同一分钟内重复调用直接跳过：循环每 3 秒转一圈，不判一下会白发刷新
+    if [ "$c_now" = "$(cat "$CLOCK_LAST" 2>/dev/null)" ]; then
+        return 0
+    fi
+
+    clock_probe
+    if [ "$CLOCK_MODE" = "ot" ]; then
+        "$FBINK" -q -k "$CLOCK_CLEAR" -b \
+            && "$FBINK" -q -t "regular=$CLOCK_FONT,px=$CLOCK_PX,top=$CLOCK_TOP,left=$CLOCK_LEFT" -b "$c_now" \
+            && "$FBINK" -q -s "$CLOCK_CLEAR"
+    else
+        "$FBINK" -q -k "$CLOCK_CLEAR" -b \
+            && "$FBINK" -q -F IBM -S "$CLOCK_SCALE" -X "$CLOCK_IBM_X" -Y "$CLOCK_IBM_Y" -b "$c_now" \
+            && "$FBINK" -q -s "$CLOCK_CLEAR"
+    fi
+    if [ $? = "0" ]; then
+        printf '%s\n' "$c_now" > "$CLOCK_LAST" 2>/dev/null
+        return 0
+    fi
+    # 写失败就把模式缓存清掉，下一轮重新探测（比如固件升级后字体路径变了）
+    rm -f "$CLOCK_MODE_FILE" "$DASH_DIR/.clockfont"
+    log "时钟写入失败（模式 $CLOCK_MODE），下轮重试"
+    return 1
+}
+
 show() {
     if [ ! -f "$DASH_IMG" ]; then
         log "没有可用图片，跳过刷新"
@@ -102,6 +179,10 @@ show() {
         return 1
     fi
     "$FBINK" -q -g "file=$DASH_IMG,halign=CENTER,valign=CENTER,w=$SCREEN_W,h=$SCREEN_H" -f
+    # 全刷之后时间位是空的（云端图不画时间），必须立刻补上。
+    # 先删记录，否则 clock_text 会以为"这一分钟已经画过"而跳过。
+    rm -f "$CLOCK_LAST"
+    clock_text
     log "已刷新屏幕"
 }
 
@@ -148,16 +229,9 @@ asleep() {
 # 边等边看，而不是一口气 sleep 半小时：
 # 否则按了电源键也要等一整个周期才响应，用户会以为又卡死了。
 # 返回 0 = 到点该刷新了；1 = .active 没了；2 = 用户按了电源键
-wait_tick() {
-    w=0
-    while [ "$w" -lt "$REFRESH_SEC" ]; do
-        sleep "$POLL_SEC"
-        w=$((w + POLL_SEC))
-        [ -f "$DASH_DIR/.active" ] || return 1
-        asleep && return 2
-    done
-    return 0
-}
+# 说明：早期版本这里是 wait_tick()，一口气 sleep 满 REFRESH_SEC 再返回。
+# 那样时钟没法按分钟更新，所以在 loop 分支里改成按 POLL_SEC 步进、自己计数。
+# 函数保留说明，代码已删。
 
 # ---------- 刷新循环（进程管理） ----------
 stop_keeper() {
@@ -219,22 +293,31 @@ case "$1" in
     loop)
         # 常驻循环。判断 .active 而不是单纯 while true：
         # 用户点「退出看板」后，最迟一个周期内自己退出，不会留孤儿进程。
+        #
+        # 节奏：每 POLL_SEC 秒转一圈，转圈时做三件事——
+        #   看有没有按电源键 / 看有没有换分钟要补时钟 / 看攒够时间该换图了。
+        # 以前是一口气睡满 30 分钟，那样时钟没法分钟级更新。
+        l_elapsed=0
+        clock_text
         while [ -f "$DASH_DIR/.active" ]; do
-            wait_tick
-            rc=$?
-            [ "$rc" = "1" ] && break
-            if [ "$rc" = "2" ]; then
+            sleep "$POLL_SEC"
+            l_elapsed=$((l_elapsed + POLL_SEC))
+            [ -f "$DASH_DIR/.active" ] || break
+            if asleep; then
                 # 用户按了电源键。把书架还回去，然后自己收工
                 log "检测到休眠（电源键），退出看板模式"
                 sh "$HERE/dash.sh" off
                 break
             fi
-            [ -f "$DASH_DIR/.active" ] || break
-            if fetch; then
-                show
-            else
-                # 下载失败保留上一次的图，不清屏——宁可显示旧数据也不要白屏
-                log "本次刷新失败，保留原图"
+            clock_text
+            if [ "$l_elapsed" -ge "$REFRESH_SEC" ]; then
+                l_elapsed=0
+                if fetch; then
+                    show
+                else
+                    # 下载失败保留上一次的图，不清屏——宁可显示旧数据也不要白屏
+                    log "本次刷新失败，保留原图"
+                fi
             fi
         done
         rm -f "$KEEPER_PID"
@@ -276,6 +359,19 @@ case "$1" in
         echo "uid  : $(id -u 2>/dev/null) / $(id 2>/dev/null | cut -d' ' -f1)"
         echo "电源 : $(lipc-get-prop com.lab126.powerd status 2>/dev/null || echo 读不到)"
         echo
+        echo "== 时钟 =="
+        if [ "$CLOCK_ON" != "1" ]; then
+            echo "已关闭（config.sh 里 CLOCK_ON=0）"
+        else
+            # 把探测结果打出来：ot 说明能用矢量字体，ibm 是退回点阵字
+            rm -f "$CLOCK_MODE_FILE" "$DASH_DIR/.clockfont"
+            clock_probe
+            echo "模式 : $CLOCK_MODE"
+            [ -n "$CLOCK_FONT" ] && echo "字体 : $CLOCK_FONT"
+            echo "位置 : top=$CLOCK_TOP left=$CLOCK_LEFT px=$CLOCK_PX"
+            echo "本机时间: $(date '+%H:%M')"
+        fi
+        echo
         echo "== 网络与图片地址 =="
         if fetch; then
             echo "图片已下载：$DASH_IMG"
@@ -289,8 +385,25 @@ case "$1" in
         show && echo "屏幕上应该已经显示看板了"
         ;;
 
+    clock)
+        # 只补一次时钟，不动别的东西。调试排版时用：
+        # 改完 config.sh 里的 CLOCK_TOP/LEFT/PX，跑一次这条就能看位置对不对。
+        # 同一分钟内重复调用会被跳过（正常行为），要强刷加 --force。
+        if [ ! -f "$DASH_IMG" ]; then
+            echo "还没有看板图，先 on 或 update 一次"
+            exit 1
+        fi
+        if [ "$2" = "--force" ]; then rm -f "$CLOCK_LAST"; fi
+        if clock_text; then
+            echo "时钟已更新：$(date '+%H:%M')（模式 ${CLOCK_MODE:-?}）"
+        else
+            echo "时钟写入失败，看 $DASH_LOG"
+            exit 1
+        fi
+        ;;
+
     *)
-        echo "用法: dash.sh on|off|update|peek|test"
+        echo "用法: dash.sh on|off|update|peek|test|clock"
         exit 1
         ;;
 esac
