@@ -21,6 +21,9 @@ concurrency:
 jobs:
   render:
     runs-on: ubuntu-latest
+    # GitHub 的 runner 是 UTC，不设这个的话图上的时间会比北京时间慢 8 小时
+    env:
+      TZ: Asia/Shanghai
     permissions:
       contents: write         # 需要写权限才能把图片推到 render 分支
 
