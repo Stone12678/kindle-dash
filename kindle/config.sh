@@ -2,11 +2,12 @@
 # 把这个文件拷到 Kindle 的 /mnt/us/kindle-dash/kindle/ 目录下
 
 # 图片地址。仓库建好后确认这一行和你的实际仓库一致
-DASH_URL="https://raw.githubusercontent.com/Stone12678/kindle-dash/render/dashboard.png"
+# GitHub Pages：和装 kTerm 用的 repo.kindlemodding.org 是同一套 CDN，
+# 实测能在国内的 Kindle 上跑通，所以主用这条。
+DASH_URL="https://stone12678.github.io/kindle-dash/dashboard.png"
 
-# 备用地址。国内直连 raw.githubusercontent.com 有时会超时，
-# 主地址失败后会依次尝试这里（填 Cloudflare Worker 反代或 Gitee 镜像，没有就留空）
-DASH_URL_FALLBACK=""
+# 备用地址。raw.githubusercontent.com 在国内时通时不通，留着兜底
+DASH_URL_FALLBACK="https://raw.githubusercontent.com/Stone12678/kindle-dash/render/dashboard.png"
 
 # 在图片地址后面加时间戳（?t=1234567890）绕过 CDN 缓存
 # raw.githubusercontent.com 走的是 CDN，同一个 URL 会被缓存几分钟；

@@ -9,3 +9,6 @@ data/reading.json
 
 # 本地测试的临时沙箱
 .test-tmp/
+
+# KPM 打包中间产物
+build/

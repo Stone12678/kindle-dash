@@ -53,11 +53,22 @@ jobs:
         run: |
           set -e
           mkdir -p /tmp/pub && cp output/dashboard.png /tmp/pub/
+          # GitHub Pages 就从 render 分支出图，所以安装用的两个文件也一起放这里：
+          # 图片、安装脚本、程序包同一个域名，只要能下一个就能下另一个
+          cp k /tmp/pub/k
+          cp documents/KindleDash-Install.sh /tmp/pub/kindle-dash-install.sh
+          # 程序包：优先用打进仓库的，没有就现场打
+          if [ -f dist/kindle-dash.tar.gz ]; then
+            cp dist/kindle-dash.tar.gz /tmp/pub/
+          else
+            sh tools/make-package.sh
+            cp dist/kindle-dash.tar.gz /tmp/pub/
+          fi
           cd /tmp/pub
           git init -q -b render
           git config user.name  "kindle-dash-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add dashboard.png
+          git add -A
           git commit -q -m "render $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           # 每次强制覆盖：render 分支始终只有 1 个提交，
           # 否则一天 48 张 PNG 累积下去，仓库很快就几十 GB

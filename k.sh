@@ -17,7 +17,10 @@
 # 只写 /mnt/us 用户分区，不碰系统分区。
 # ============================================================
 
-PKG_URL="https://cdn.jsdelivr.net/gh/Stone12678/kindle-dash@main/dist/kindle-dash.tar.gz"
+# 程序包和本脚本放在同一台服务器上（GitHub Pages），
+# 只要能下到本脚本，就一定能下到程序包。
+# jsDelivr 在 Kindle 的网络里会被 reset，别再用。
+PKG_URL="https://stone12678.github.io/kindle-dash/kindle-dash.tar.gz"
 PKG2_URL="https://raw.githubusercontent.com/Stone12678/kindle-dash/main/dist/kindle-dash.tar.gz"
 
 DEST="/mnt/us/kindle-dash"
