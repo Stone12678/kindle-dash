@@ -131,6 +131,18 @@ clock_probe() {
                 break
             fi
         done
+        # 候选全落空时退一步：固件升级后字体路径和文件名都可能变，
+        # 与其硬编码一长串猜名字，不如直接抓系统字体目录里的粗体，
+        # 数字足够清楚，也不至于因为路径变了就完全没有文字。
+        if [ "$CLOCK_MODE" != "ot" ]; then
+            for c_f in /usr/java/lib/fonts/*Bold*.ttf /usr/java/lib/fonts/*bold*.ttf; do
+                if [ -f "$c_f" ]; then
+                    CLOCK_FONT="$c_f"
+                    CLOCK_MODE="ot"
+                    break
+                fi
+            done
+        fi
     fi
     printf '%s\n' "$CLOCK_MODE" > "$CLOCK_MODE_FILE" 2>/dev/null
     printf '%s\n' "$CLOCK_FONT" > "$DASH_DIR/.clockfont" 2>/dev/null
@@ -163,7 +175,24 @@ clock_text() {
         printf '%s\n' "$c_now" > "$CLOCK_LAST" 2>/dev/null
         return 0
     fi
-    # 写失败就把模式缓存清掉，下一轮重新探测（比如固件升级后字体路径变了）
+    # 矢量字体这条路走不通时不能一直重试同一条死路：
+    # 字体文件存在不代表 fbink 真能读它（裁剪过的固件、无权限都可能），
+    # 直接锁到内置点阵再试一次，至少屏幕上要有数字。
+    if [ "$CLOCK_MODE" = "ot" ]; then
+        CLOCK_MODE="ibm"
+        CLOCK_FONT=""
+        printf 'ibm\n' > "$CLOCK_MODE_FILE" 2>/dev/null
+        printf '\n' > "$DASH_DIR/.clockfont" 2>/dev/null
+        log "矢量字体写不进去，改用内置点阵"
+        "$FBINK" -q -k "$CLOCK_CLEAR" -b \
+            && "$FBINK" -q -F IBM -S "$CLOCK_SCALE" -X "$CLOCK_IBM_X" -Y "$CLOCK_IBM_Y" -b "$c_now" \
+            && "$FBINK" -q -s "$CLOCK_CLEAR"
+        if [ $? = "0" ]; then
+            printf '%s\n' "$c_now" > "$CLOCK_LAST" 2>/dev/null
+            return 0
+        fi
+    fi
+    # 还是不行就把模式缓存清掉，下一轮重新探测（比如固件升级后字体路径变了）
     rm -f "$CLOCK_MODE_FILE" "$DASH_DIR/.clockfont"
     log "时钟写入失败（模式 $CLOCK_MODE），下轮重试"
     return 1
@@ -383,6 +412,14 @@ case "$1" in
         echo
         echo "== 试刷一次 =="
         show && echo "屏幕上应该已经显示看板了"
+        echo
+        echo "== 试写时钟 =="
+        rm -f "$CLOCK_LAST"
+        if clock_text; then
+            echo "已叠加时间（模式 $CLOCK_MODE），看左上角位置对不对"
+        else
+            echo "时间没写上去，看 $DASH_LOG"
+        fi
         ;;
 
     clock)

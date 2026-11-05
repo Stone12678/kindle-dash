@@ -184,17 +184,23 @@ EOF
 
 # 调 dash.sh，返回退出码
 run_dash() {
-    ( cd "$SB" && STUB_DIR="$STUB" PATH="$STUB:$PATH" sh "$SB/kindle/dash.sh" "$@" ) >"$TMP/out" 2>&1
+    # </dev/null 不能省：在后台/管道里跑测试时 stdin 是一根永远不关的管道，
+    # 任何一步若去读 stdin 就会永远挂住，症状是"测试跑到一半没动静了"。
+    ( cd "$SB" && STUB_DIR="$STUB" PATH="$STUB:$PATH" sh "$SB/kindle/dash.sh" "$@" ) </dev/null >"$TMP/out" 2>&1
     echo $?
 }
 # on 是"甩出去就返回"的，真正干活的是后台的 boot 进程。
 # 断言之前先等它把刷新循环起起来，否则读到的是半成品状态。
 settle() {
     local i
-    for i in $(seq 1 80); do
+    for i in $(seq 1 150); do
         [ -f "$SB/dash/.keeper.pid" ] && return 0
         sleep 0.1
     done
+    # 没起来的时候最怕"只报一句失败"，看不出为什么。直接把两个日志打出来。
+    echo "  [诊断] 刷新循环没起来"
+    sed 's/^/    out: /' "$TMP/out" 2>/dev/null | tail -6
+    sed 's/^/    log: /' "$SB/dash/dash.log" 2>/dev/null | tail -6
     return 1
 }
 
