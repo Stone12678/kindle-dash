@@ -37,7 +37,9 @@ done
 echo "[好] 语法没问题"
 
 echo "== 打包 =="
-rm -rf dist
+# 只清掉自己的产物，不要整个删 dist：
+# 局域网分发目录 dist/serve 也在里面，删了整个 serve 就没了
+rm -f dist/kindle-dash.tar.gz dist/KindleDash-Install.sh
 mkdir -p dist
 tar czf dist/kindle-dash.tar.gz kindle extensions
 cp documents/KindleDash-Install.sh dist/
