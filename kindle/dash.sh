@@ -17,6 +17,16 @@
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/config.sh"
 
+# 旧版 config.sh 里没有这几个变量，给默认值：
+# 这样升级只换 dash.sh 也不会因为缺变量把刷新循环跑崩。
+POLL_SEC="${POLL_SEC:-3}"                  # 每隔几秒看一眼有没有按电源键
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-8}"    # 连不上就快点换下一个地址
+FETCH_TIMEOUT="${FETCH_TIMEOUT:-30}"
+DASH_EXTRA_URLS="${DASH_EXTRA_URLS:-}"
+BOOT_DELAY="${BOOT_DELAY:-8}"                # 启动后等这么久再接管屏幕（给 scriptlet 退出的时间）
+# 轮询间隔不能比刷新周期还长，否则测试里把周期改成 1 秒就不刷新了
+[ "$POLL_SEC" -gt "$REFRESH_SEC" ] 2>/dev/null && POLL_SEC="$REFRESH_SEC"
+
 mkdir -p "$DASH_DIR"
 
 log() {
@@ -30,9 +40,24 @@ log() {
 # ---------- 下载 ----------
 # 关键：校验 PNG 魔数。断网或地址写错时 curl 可能抓到一堆 HTML 错误页，
 # 直接喂给 fbink 会让屏幕变成一块白板，而且看不出是哪里错了。
+#
+# 为什么要有"多个来源"：国内网络到境外 CDN 很不稳定，jsDelivr 会被 RST、
+# github.io 会挂住。所以这里按顺序试一串地址，谁先给出一张真 PNG 就用谁，
+# 并把赢家记到 .lasturl —— 下一轮先试它，省得每次都从挂住的那个开始等。
 fetch() {
-    for url in "$DASH_URL" "$DASH_URL_FALLBACK"; do
+    cands=""
+    [ -s "$DASH_DIR/.lasturl" ] && cands="$(cat "$DASH_DIR/.lasturl" 2>/dev/null)"
+    cands="$cands
+$DASH_URL
+$DASH_URL_FALLBACK
+$DASH_EXTRA_URLS"
+
+    tried=" "
+    for url in $cands; do
         [ -z "$url" ] && continue
+        # 去重：同一个地址不要在候选表里出现两次
+        case "$tried" in *" $url "*) continue ;; esac
+        tried="$tried$url "
 
         # 加时间戳破 CDN 缓存：raw.githubusercontent.com 对同一 URL 会缓存几分钟，
         # 不加的话可能云端早就更新了，设备还在反复拿同一张旧图。
@@ -45,9 +70,13 @@ fetch() {
             real="$url"
         fi
 
-        if curl -sfL --max-time 90 --retry 2 --retry-delay 3 -o "$DASH_IMG.tmp" "$real"; then
+        # 连接超时单独设小：挂住的地址（比如被墙的 github.io）会在 TCP 阶段
+        # 一直不返回，不给它一个短上限，整个刷新周期就白白耗在这一个地址上
+        if curl -sfL --connect-timeout "$CONNECT_TIMEOUT" --max-time "$FETCH_TIMEOUT" \
+                -o "$DASH_IMG.tmp" "$real"; then
             if [ "$(head -c 8 "$DASH_IMG.tmp" | od -An -tx1 | tr -d ' \n')" = "89504e470d0a1a0a" ]; then
                 mv "$DASH_IMG.tmp" "$DASH_IMG"
+                echo "$url" > "$DASH_DIR/.lasturl" 2>/dev/null
                 log "下载成功 ${url%%\?*}"
                 return 0
             fi
@@ -100,6 +129,36 @@ start_ui() {
     return 0
 }
 
+# ---------- 休眠检测（这就是"退出键"） ----------
+# 看板模式下系统界面被停掉了，书架点不到，所以必须有别的出口，
+# 否则用户只能长按电源键硬重启——Root 还会丢。
+#
+# 这里借用电源键：按一下 → powerd 进入休眠 → 我们视为"想退出"，
+# 收尾并把书架还回去，等用户再按一下唤醒时看到的就是原生界面。
+# 查不到状态（老固件没有这个属性）时就当作"醒着"，看板照常跑，不会误退。
+asleep() {
+    a_st="$(lipc-get-prop com.lab126.powerd status 2>/dev/null)"
+    [ -z "$a_st" ] && return 1
+    case "$(printf '%s' "$a_st" | tr 'A-Z' 'a-z')" in
+        *suspend*|*"screen saver"*) return 0 ;;
+    esac
+    return 1
+}
+
+# 边等边看，而不是一口气 sleep 半小时：
+# 否则按了电源键也要等一整个周期才响应，用户会以为又卡死了。
+# 返回 0 = 到点该刷新了；1 = .active 没了；2 = 用户按了电源键
+wait_tick() {
+    w=0
+    while [ "$w" -lt "$REFRESH_SEC" ]; do
+        sleep "$POLL_SEC"
+        w=$((w + POLL_SEC))
+        [ -f "$DASH_DIR/.active" ] || return 1
+        asleep && return 2
+    done
+    return 0
+}
+
 # ---------- 刷新循环（进程管理） ----------
 stop_keeper() {
     if [ -f "$KEEPER_PID" ]; then
@@ -135,7 +194,7 @@ case "$1" in
 
     boot)
         # 真正干活的分支。两个来源：上面 fork 出来的，或者开机时 upstart 拉起的。
-        sleep 8
+        sleep "$BOOT_DELAY"
         [ -f "$DASH_DIR/.active" ] || exit 0
         lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
         stop_ui
@@ -161,7 +220,15 @@ case "$1" in
         # 常驻循环。判断 .active 而不是单纯 while true：
         # 用户点「退出看板」后，最迟一个周期内自己退出，不会留孤儿进程。
         while [ -f "$DASH_DIR/.active" ]; do
-            sleep "$REFRESH_SEC"
+            wait_tick
+            rc=$?
+            [ "$rc" = "1" ] && break
+            if [ "$rc" = "2" ]; then
+                # 用户按了电源键。把书架还回去，然后自己收工
+                log "检测到休眠（电源键），退出看板模式"
+                sh "$HERE/dash.sh" off
+                break
+            fi
             [ -f "$DASH_DIR/.active" ] || break
             if fetch; then
                 show
@@ -207,6 +274,7 @@ case "$1" in
         echo "fbink: $FBINK"
         echo "curl : $(command -v curl)"
         echo "uid  : $(id -u 2>/dev/null) / $(id 2>/dev/null | cut -d' ' -f1)"
+        echo "电源 : $(lipc-get-prop com.lab126.powerd status 2>/dev/null || echo 读不到)"
         echo
         echo "== 网络与图片地址 =="
         if fetch; then
