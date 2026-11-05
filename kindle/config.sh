@@ -1,13 +1,26 @@
 # Kindle 端配置 —— 只需要改这一个文件
 # 把这个文件拷到 Kindle 的 /mnt/us/kindle-dash/kindle/ 目录下
 
-# 图片地址。仓库建好后确认这一行和你的实际仓库一致
-# GitHub Pages：和装 kTerm 用的 repo.kindlemodding.org 是同一套 CDN，
-# 实测能在国内的 Kindle 上跑通，所以主用这条。
-DASH_URL="https://stone12678.github.io/kindle-dash/dashboard.png"
+# 图片地址。会按顺序试，第一个给出真 PNG 的就用，并记进 .lasturl
+#
+# 为什么要排这么多：国内到境外 CDN 很不稳定，实测 jsDelivr 被 RST、
+# github.io 会挂住不返回。所以按"实测能通"的优先级排：
+#   1. 局域网：电脑上跑 python -m http.server 8765，最稳，但电脑得开着
+#   2. gh-proxy 镜像：GitHub 的反代，国内一般能过
+#   3. 官方 raw：时通时不通
+#   4. GitHub Pages：国内经常挂住，排最后
+DASH_URL="http://192.168.31.110:8765/dashboard.png"
 
-# 备用地址。raw.githubusercontent.com 在国内时通时不通，留着兜底
-DASH_URL_FALLBACK="https://raw.githubusercontent.com/Stone12678/kindle-dash/render/dashboard.png"
+DASH_URL_FALLBACK="https://gh-proxy.com/https://raw.githubusercontent.com/Stone12678/kindle-dash/render/dashboard.png"
+
+DASH_EXTRA_URLS="https://raw.githubusercontent.com/Stone12678/kindle-dash/render/dashboard.png https://stone12678.github.io/kindle-dash/dashboard.png"
+
+# 连不上就赶紧换下一个，别把整个刷新周期耗在一个被墙的地址上
+CONNECT_TIMEOUT=8
+FETCH_TIMEOUT=30
+
+# 每隔几秒看一眼电源键状态（按一下就退出看板）
+POLL_SEC=3
 
 # 在图片地址后面加时间戳（?t=1234567890）绕过 CDN 缓存
 # raw.githubusercontent.com 走的是 CDN，同一个 URL 会被缓存几分钟；
